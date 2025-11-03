@@ -64,27 +64,10 @@ function upsertByTitle(title, children, meta) {
 
   if (!hit) return createPageWithChunkAppend(title, children, meta);
 
-  // upsertByTitle でヒット時のプロパティ更新
-  if (meta && (meta.url || (meta.tags && meta.tags.length))) {
-    const properties = {};
-    if (meta.url) properties.URL = { url: meta.url };
-    if (meta.tags && meta.tags.length) {
-      properties.Tags = { multi_select: meta.tags.map(name => ({ name })) };
-    }
-    const resUpdate = UrlFetchApp.fetch(`https://api.notion.com/v1/pages/${hit.id}`, {
-      method: 'patch', headers: NOTION_HEADERS,
-      payload: JSON.stringify({ properties }), muteHttpExceptions: true
-    });
-    const updateStatus = resUpdate.getResponseCode();
-    if (updateStatus < 200 || updateStatus >= 300) {
-      Logger.log(`❌ Notion page update failed (${updateStatus}): ${resUpdate.getContentText()}`);
-      throw new Error(`Notion page update failed (${updateStatus})`);
-    }
-  }
-
-
-  appendBlocksWithTables(hit.id, children, false);
-  Logger.log(`🔁 Appended: ${title} (+${children.length})`);
+  archiveNotionPage(hit.id);
+  Utilities.sleep(500);
+  createPageWithChunkAppend(title, children, meta);
+  Logger.log(`🔁 Recreated: ${title} (${children.length} blocks)`);
 }
 
 
@@ -231,12 +214,42 @@ function appendBlocksWithTables(parentId, children, isPage) {
       continue;
     }
 
-    // 通常ブロック
-    normalBuf.push(b);
-    if (normalBuf.length >= 90) flushNormal(normalBuf);
+    const block = { ...b };
+    if (!block.object) block.object = 'block';
+    if (block.id) delete block.id;
+    if (block.synced_block && block.synced_block.synced_from) {
+      delete block.synced_block.synced_from;
+    }
+    for (const key of Object.keys(block)) {
+      if (key.startsWith('__')) delete block[key];
+    }
+
+    normalBuf.push(block);
+    if (normalBuf.length >= 50) flushNormal(normalBuf);
   }
 
   flushNormal(normalBuf);
+}
+
+
+
+function archiveNotionPage(pageId) {
+  try {
+    const res = UrlFetchApp.fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+      method: 'patch',
+      headers: NOTION_HEADERS,
+      payload: JSON.stringify({ archived: true }),
+      muteHttpExceptions: true
+    });
+    const status = res.getResponseCode();
+    if (status < 200 || status >= 300) {
+      Logger.log(`❌ Failed to archive page (${status}): ${res.getContentText()}`);
+    } else {
+      Logger.log(`🗑️ Archived existing page (${pageId})`);
+    }
+  } catch (e) {
+    Logger.log(`❌ Exception archiving page: ${e}`);
+  }
 }
 
 
