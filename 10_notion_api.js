@@ -137,62 +137,98 @@ function appendBlocksWithTables(parentId, children, isPage) {
       let tableId = null;
       let ok = false;
 
-      // 1) table ブロックを追加
-      try {
-        const res1 = UrlFetchApp.fetch(`https://api.notion.com/v1/blocks/${parentId}/children`, {
-          method: 'patch',
-          headers: tableHeaders,
-          payload: JSON.stringify({
-            children: [{ object: 'block', type: 'table', table: b.table }]
-          }),
-          muteHttpExceptions: true
-        });
-        const status1 = res1.getResponseCode();
-        const text1 = res1.getContentText() || '';
-        if (status1 >= 200 && status1 < 300) {
-          const data1 = JSON.parse(text1 || '{}');
-          const created = (data1.results && data1.results[0]) ? data1.results[0] : null;
-          tableId = created && created.id ? created.id : null;
-          ok = !!tableId;
-          if (!ok) {
-            Logger.log(`❌ Notion table id missing: ${text1}`);
-          }
-        } else {
-          Logger.log(`❌ Notion table create failed (${status1}): ${text1}`);
-          ok = false;
-        }
-      } catch (e) {
-        Logger.log(`❌ Notion table create exception: ${e}`);
-        ok = false;
-      }
+      const tableRowBlocks = b.__rows.map(r => ({
+        object: 'block',
+        type: 'table_row',
+        table_row: { cells: r.cells }
+      }));
 
-      // 2) table_row 追加
-      if (ok) {
+      // 1) 新API：table.children に table_row を同梱
+      if (tableHeaders !== NOTION_HEADERS) {
         try {
-          const rows = b.__rows.map(r => ({
-            object: 'block',
-            type: 'table_row',
-            table_row: { cells: r.cells }
-          }));
-          for (let i = 0; i < rows.length; i += 100) {
-            const chunk = rows.slice(i, i + 100);
-            const resRows = UrlFetchApp.fetch(`https://api.notion.com/v1/blocks/${tableId}/children`, {
-              method: 'patch',
-              headers: tableHeaders,
-              payload: JSON.stringify({ children: chunk }),
-              muteHttpExceptions: true
-            });
-            const statusRows = resRows.getResponseCode();
-            if (statusRows < 200 || statusRows >= 300) {
-              Logger.log(`❌ Notion table row append failed (${statusRows}): ${resRows.getContentText()}`);
-              ok = false;
-              break;
-            }
-            Utilities.sleep(300);
+          const resNew = UrlFetchApp.fetch(`https://api.notion.com/v1/blocks/${parentId}/children`, {
+            method: 'patch',
+            headers: tableHeaders,
+            payload: JSON.stringify({
+              children: [{
+                object: 'block',
+                type: 'table',
+                table: {
+                  table_width: b.table.table_width,
+                  has_column_header: b.table.has_column_header,
+                  has_row_header: b.table.has_row_header,
+                  children: tableRowBlocks
+                }
+              }]
+            }),
+            muteHttpExceptions: true
+          });
+          const statusNew = resNew.getResponseCode();
+          const textNew = resNew.getContentText() || '';
+          if (statusNew >= 200 && statusNew < 300) {
+            const dataNew = JSON.parse(textNew || '{}');
+            const createdNew = (dataNew.results && dataNew.results[0]) ? dataNew.results[0] : null;
+            tableId = createdNew && createdNew.id ? createdNew.id : null;
+            ok = !!tableId;
+            if (!ok) Logger.log(`❌ Notion table id missing (new API): ${textNew}`);
+          } else {
+            Logger.log(`❌ Notion table create failed (new API ${statusNew}): ${textNew}`);
           }
         } catch (e) {
-          Logger.log(`❌ Notion table row append exception: ${e}`);
-          ok = false;
+          Logger.log(`❌ Notion table create exception (new API): ${e}`);
+        }
+      }
+
+      // 2) 旧API：table → table_row を段階投稿
+      if (!ok) {
+        try {
+          const res1 = UrlFetchApp.fetch(`https://api.notion.com/v1/blocks/${parentId}/children`, {
+            method: 'patch',
+            headers: NOTION_HEADERS,
+            payload: JSON.stringify({
+              children: [{ object: 'block', type: 'table', table: b.table }]
+            }),
+            muteHttpExceptions: true
+          });
+          const status1 = res1.getResponseCode();
+          const text1 = res1.getContentText() || '';
+          if (status1 >= 200 && status1 < 300) {
+            const data1 = JSON.parse(text1 || '{}');
+            const created = (data1.results && data1.results[0]) ? data1.results[0] : null;
+            tableId = created && created.id ? created.id : null;
+            ok = !!tableId;
+            if (!ok) {
+              Logger.log(`❌ Notion table id missing: ${text1}`);
+            }
+          } else {
+            Logger.log(`❌ Notion table create failed (${status1}): ${text1}`);
+          }
+        } catch (e) {
+          Logger.log(`❌ Notion table create exception: ${e}`);
+        }
+
+        if (ok) {
+          try {
+            for (let i = 0; i < tableRowBlocks.length; i += 100) {
+              const chunk = tableRowBlocks.slice(i, i + 100);
+              const resRows = UrlFetchApp.fetch(`https://api.notion.com/v1/blocks/${tableId}/children`, {
+                method: 'patch',
+                headers: NOTION_HEADERS,
+                payload: JSON.stringify({ children: chunk }),
+                muteHttpExceptions: true
+              });
+              const statusRows = resRows.getResponseCode();
+              if (statusRows < 200 || statusRows >= 300) {
+                Logger.log(`❌ Notion table row append failed (${statusRows}): ${resRows.getContentText()}`);
+                ok = false;
+                break;
+              }
+              Utilities.sleep(300);
+            }
+          } catch (e) {
+            Logger.log(`❌ Notion table row append exception: ${e}`);
+            ok = false;
+          }
         }
       }
 
