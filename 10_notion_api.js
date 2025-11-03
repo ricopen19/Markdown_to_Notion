@@ -83,22 +83,6 @@ function upsertByTitle(title, children, meta) {
   }
 
 
-  // コンテンツは追記
-  for (let i = 0; i < children.length; i += 100) {
-    const chunk = children.slice(i, i + 100);
-    const resAppend = UrlFetchApp.fetch(`https://api.notion.com/v1/blocks/${hit.id}/children`, {
-      method: 'patch', headers: NOTION_HEADERS,
-      payload: JSON.stringify({ children: chunk }), muteHttpExceptions: true
-    });
-    const appendStatus = resAppend.getResponseCode();
-    if (appendStatus < 200 || appendStatus >= 300) {
-      Logger.log(`❌ Notion block append failed (${appendStatus}): ${resAppend.getContentText()}`);
-      throw new Error(`Notion block append failed (${appendStatus})`);
-    }
-    Utilities.sleep(500);
-  }
-  // ヒット後の追記部分を置き換え
-  // （プロパティ更新は既存のままでOK）
   appendBlocksWithTables(hit.id, children, false);
   Logger.log(`🔁 Appended: ${title} (+${children.length})`);
 }
@@ -145,22 +129,24 @@ function appendBlocksWithTables(parentId, children, isPage) {
 
       // 1) 新API：table.children に table_row を同梱
       if (tableHeaders !== NOTION_HEADERS) {
+        const payloadNew = {
+          children: [{
+            object: 'block',
+            type: 'table',
+            table: {
+              table_width: b.table.table_width,
+              has_column_header: b.table.has_column_header,
+              has_row_header: b.table.has_row_header,
+              children: tableRowBlocks
+            }
+          }]
+        };
+        Logger.log(`🧪 table payload (new API) rows=${tableRowBlocks.length}: ${JSON.stringify(payloadNew)}`);
         try {
           const resNew = UrlFetchApp.fetch(`https://api.notion.com/v1/blocks/${parentId}/children`, {
             method: 'patch',
             headers: tableHeaders,
-            payload: JSON.stringify({
-              children: [{
-                object: 'block',
-                type: 'table',
-                table: {
-                  table_width: b.table.table_width,
-                  has_column_header: b.table.has_column_header,
-                  has_row_header: b.table.has_row_header,
-                  children: tableRowBlocks
-                }
-              }]
-            }),
+            payload: JSON.stringify(payloadNew),
             muteHttpExceptions: true
           });
           const statusNew = resNew.getResponseCode();
@@ -181,6 +167,7 @@ function appendBlocksWithTables(parentId, children, isPage) {
 
       // 2) 旧API：table → table_row を段階投稿
       if (!ok) {
+        Logger.log(`🧪 fallback to legacy table API rows=${tableRowBlocks.length}`);
         try {
           const res1 = UrlFetchApp.fetch(`https://api.notion.com/v1/blocks/${parentId}/children`, {
             method: 'patch',
@@ -254,42 +241,79 @@ function appendBlocksWithTables(parentId, children, isPage) {
 
 
 
-
-
 function hasFrontMatterNotionTrue(md) {
-  const m = md.match(/^---\s*([\s\S]*?)\s*---/);
-  if (!m) return false;
-  return /^\s*notion\s*:\s*true\s*$/mi.test(m[1]);
+  const fm = extractFrontMatter(md);
+  if (!fm) return false;
+  const parsed = parseFrontMatterContent(fm.format, fm.content);
+  return !!parsed.notion;
 }
 
 
 
 function parseFrontMatter(md) {
-  const m = md.match(/^---\s*([\s\S]*?)\s*---\s*/);
-  if (!m) return { body: md, url: null, tags: [] };
+  const fm = extractFrontMatter(md);
+  if (!fm) return { body: md, url: null, tags: [], notion: false, synced: false };
 
-  const yaml = m[1];
+  const parsed = parseFrontMatterContent(fm.format, fm.content);
+  const url = parsed.url ? String(parsed.url).trim() : null;
+  const tags = Array.from(new Set((parsed.tags || []).map(t => String(t).trim()).filter(Boolean)));
+
+  return { body: fm.body, url, tags, notion: !!parsed.notion, synced: !!parsed.synced };
+}
+
+
+
+function extractFrontMatter(md) {
+  if (!md) return null;
+  const m = md.match(/^(\-\-\-|\+\+\+)\s*([\s\S]*?)\s*\1\s*/);
+  if (!m) return null;
+  const format = m[1] === '---' ? 'yaml' : 'toml';
+  const content = m[2] || '';
   const body = md.slice(m[0].length);
+  return { format, content, body };
+}
 
-  const lines = yaml.split(/\r?\n/);
+
+
+function parseFrontMatterContent(format, content) {
+  if (format === 'yaml') return parseYamlFrontMatterContent(content);
+  if (format === 'toml') return parseTomlFrontMatterContent(content);
+  return { notion: false, url: null, tags: [], synced: false };
+}
+
+
+
+function parseYamlFrontMatterContent(yaml) {
+  const lines = (yaml || '').split(/\r?\n/);
   let url = null;
   let tags = [];
+  let notion = false;
+  let synced = false;
 
   const unquote = (s) => s.replace(/^\s*["']?(.+?)["']?\s*$/, '$1');
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (!line) continue;
 
-    // url 系キー
+    const mn = line.match(/^\s*notion\s*:\s*(.+)\s*$/i);
+    if (mn) {
+      notion = /^true$/i.test(mn[1].trim());
+      continue;
+    }
+
+    const ms = line.match(/^\s*notionsynced\s*:\s*(.+)\s*$/i);
+    if (ms) {
+      synced = /^true$/i.test(ms[1].trim());
+      continue;
+    }
+
     const mu = line.match(/^\s*(url|link|source|youtube)\s*:\s*(.+)\s*$/i);
     if (mu) { url = unquote(mu[2].trim()); continue; }
 
-    // tags
     const mt = line.match(/^\s*tags\s*:\s*(.*)$/i);
     if (mt) {
       const rest = mt[1].trim();
-
-      // 1) 行内配列
       if (rest.startsWith('[')) {
         const inside = rest.replace(/^\[/, '').replace(/\]$/, '');
         tags = tags.concat(
@@ -297,27 +321,81 @@ function parseFrontMatter(md) {
         );
         continue;
       }
-      // 2) 行内カンマ区切り
       if (rest) {
         tags = tags.concat(
           rest.split(',').map(s => unquote(s.trim())).filter(Boolean)
         );
         continue;
       }
-      // 3) 箇条書きブロック
       let j = i + 1;
       while (j < lines.length) {
         const l = lines[j];
-        if (/^\s*[A-Za-z_][\w-]*\s*:/.test(l)) break; // 次のキー
+        if (/^\s*[A-Za-z_][\w-]*\s*:/.test(l)) break;
         const mi = l.match(/^\s*-\s*(.+)\s*$/);
         if (mi) { tags.push(unquote(mi[1].trim())); j++; continue; }
-        if (/^\s*$/.test(l)) { j++; continue; } // 空行スキップ
+        if (/^\s*$/.test(l)) { j++; continue; }
         break;
       }
       i = j - 1;
     }
   }
 
-  tags = Array.from(new Set(tags.filter(Boolean)));
-  return { body, url, tags };
+  return { notion, url, tags, synced };
+}
+
+
+
+function parseTomlFrontMatterContent(toml) {
+  const lines = (toml || '').split(/\r?\n/);
+  const data = {};
+
+  const stripComment = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) return '';
+    return line;
+  };
+  const unquote = (s) => s.replace(/^\s*["']?(.+?)["']?\s*$/, '$1');
+
+  const parseTomlValue = (raw) => {
+    if (!raw) return '';
+    const v = raw.trim();
+    if (/^\[(.*)\]$/.test(v)) {
+      const inside = v.slice(1, -1).trim();
+      if (!inside) return [];
+      return inside.split(',').map(part => parseTomlValue(part));
+    }
+    if (/^"(.*)"$/.test(v)) return RegExp.$1;
+    if (/^'(.*)'$/.test(v)) return RegExp.$1;
+    if (/^(true|false)$/i.test(v)) return /^true$/i.test(v);
+    return v;
+  };
+
+  for (const rawLine of lines) {
+    const line = stripComment(rawLine);
+    if (!line) continue;
+    const m = line.match(/^([A-Za-z0-9_\-]+)\s*=\s*(.+)$/);
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    data[key] = parseTomlValue(m[2]);
+  }
+
+  const notionRaw = data.notion;
+  const notion = typeof notionRaw === 'boolean'
+    ? notionRaw
+    : /^true$/i.test((notionRaw || '').toString().trim());
+  const syncedRaw = data.notionsynced || data.synced;
+  const synced = typeof syncedRaw === 'boolean'
+    ? syncedRaw
+    : /^true$/i.test((syncedRaw || '').toString().trim());
+  const url = data.url || data.link || data.source || data.youtube || null;
+
+  let tags = [];
+  const rawTags = data.tags;
+  if (Array.isArray(rawTags)) {
+    tags = rawTags.map(v => unquote(String(v)));
+  } else if (typeof rawTags === 'string') {
+    tags = rawTags.split(',').map(s => unquote(s));
+  }
+
+  return { notion, url, tags, synced };
 }

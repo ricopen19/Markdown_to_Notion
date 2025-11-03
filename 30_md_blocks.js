@@ -202,7 +202,7 @@ function parseTableAt(lines, startIdx) {
   let dataRows = rows.slice();
   if (rows.length >= 2 && TABLE_ALIGN_REGEX.test(rows[1])) {
     header = true;
-    dataRows = [rows[0]].concat(rows.slice(2)); // 0:ヘッダ, 1:アラインメント捨て
+    dataRows = rows.slice(2); // 0:ヘッダ, 1:アラインメントを除外した残り
   }
 
   // 3) セル分割（\| エスケープ対応）
@@ -215,17 +215,33 @@ function parseTableAt(lines, startIdx) {
 
   const headerCells = header ? splitCells(rows[0]) : null;
   const firstCells  = splitCells(dataRows[0] || '');
-  const width = (header ? headerCells.length : firstCells.length) || 1;
+  const width = Math.max(
+    header && headerCells ? headerCells.length : 0,
+    firstCells.length,
+    1
+  );
+
+  const toRichCell = (cell) => {
+    const trimmed = cell.trim();
+    const blockEq = trimmed.match(/^\$\$([\s\S]+?)\$\$$/);
+    if (blockEq) {
+      const expr = blockEq[1].trim();
+      if (expr) {
+        return [{ type: 'equation', equation: { expression: expr } }];
+      }
+    }
+    return convertInlineLatexToRich(cell);
+  };
 
   // 4) 各行を rich_text に変換
   const rowPayloads = [];
   if (header && headerCells) {
-    rowPayloads.push({ isHeader: true, cells: headerCells.map(c => convertInlineLatexToRich(c)) });
+    rowPayloads.push({ isHeader: true, cells: headerCells.map(c => toRichCell(c)) });
   }
   for (let r = 0; r < dataRows.length; r++) {
     const cells = splitCells(dataRows[r]);
     while (cells.length < width) cells.push('');
-    const rt = cells.slice(0, width).map(c => convertInlineLatexToRich(c));
+    const rt = cells.slice(0, width).map(c => toRichCell(c));
     rowPayloads.push({ isHeader: false, cells: rt });
   }
 
@@ -247,4 +263,3 @@ function parseTableAt(lines, startIdx) {
 
   return { used: i - startIdx, block };
 }
-
