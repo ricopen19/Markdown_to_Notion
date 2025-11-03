@@ -252,13 +252,20 @@ function hasFrontMatterNotionTrue(md) {
 
 function parseFrontMatter(md) {
   const fm = extractFrontMatter(md);
-  if (!fm) return { body: md, url: null, tags: [], notion: false, synced: false };
+  if (!fm) return { body: md, url: null, tags: [], notion: false, synced: false, format: null };
 
   const parsed = parseFrontMatterContent(fm.format, fm.content);
   const url = parsed.url ? String(parsed.url).trim() : null;
   const tags = Array.from(new Set((parsed.tags || []).map(t => String(t).trim()).filter(Boolean)));
 
-  return { body: fm.body, url, tags, notion: !!parsed.notion, synced: !!parsed.synced };
+  return {
+    body: fm.body,
+    url,
+    tags,
+    notion: !!parsed.notion,
+    synced: !!parsed.synced,
+    format: fm.format
+  };
 }
 
 
@@ -343,6 +350,65 @@ function parseYamlFrontMatterContent(yaml) {
   return { notion, url, tags, synced };
 }
 
+
+
+function ensureNotionSyncedFrontMatterText(raw) {
+  const match = raw.match(/^(\-\-\-|\+\+\+)\s*([\s\S]*?)\s*\1\s*/);
+  if (!match) {
+    const prefix = '---';
+    const body = raw;
+    const needsNewline = body.length && !body.startsWith('\n');
+    const updated = `${prefix}\nNotionSynced: true\n${prefix}${needsNewline ? '\n' : ''}${body}`;
+    return { updated: true, content: updated };
+  }
+
+  const delim = match[1];
+  const format = delim === '---' ? 'yaml' : 'toml';
+  let content = match[2] || '';
+  const rest = raw.slice(match[0].length);
+  let didChange = false;
+
+  if (format === 'yaml') {
+    if (/\bNotionSynced\s*:\s*true\b/mi.test(content)) {
+      didChange = false;
+    } else if (/\bNotionSynced\s*:/mi.test(content)) {
+      const replaced = content.replace(/\bNotionSynced\s*:\s*.*$/mi, 'NotionSynced: true');
+      if (replaced !== content) {
+        content = replaced;
+        didChange = true;
+      }
+    } else {
+      if (content.trim().length) {
+        content = content.replace(/\s*$/, '\n');
+      }
+      content += 'NotionSynced: true';
+      didChange = true;
+    }
+  } else {
+    if (/\bNotionSynced\s*=\s*true\b/mi.test(content)) {
+      didChange = false;
+    } else if (/\bNotionSynced\s*=/mi.test(content)) {
+      const replaced = content.replace(/\bNotionSynced\s*=\s*.*$/mi, 'NotionSynced = true');
+      if (replaced !== content) {
+        content = replaced;
+        didChange = true;
+      }
+    } else {
+      if (content.trim().length) {
+        content = content.replace(/\s*$/, '\n');
+      }
+      content += 'NotionSynced = true';
+      didChange = true;
+    }
+  }
+
+  if (!didChange) return { updated: false, content: raw };
+
+  const cleanedContent = content.replace(/\s+$/, '');
+  const frontMatter = `${delim}\n${cleanedContent}\n${delim}`;
+  const body = rest.length ? (rest.startsWith('\n') ? rest : '\n' + rest) : '\n';
+  return { updated: true, content: frontMatter + body };
+}
 
 
 function parseTomlFrontMatterContent(toml) {

@@ -4,7 +4,7 @@ function pushOneFileToNotion() {
   const title = file.getName().replace(/\.md$/i, '');
   const raw  = file.getBlob().getDataAsString('UTF-8');
 
-  const meta0 = parseFrontMatter(raw) || { body: raw, url: null, tags: [], notion: false, synced: false };
+  const meta0 = parseFrontMatter(raw) || { body: raw, url: null, tags: [], notion: false, synced: false, format: null };
   if (meta0.synced) {
     Logger.log('⏭️ Skip (NotionSynced=true) for pushOneFileToNotion');
     return;
@@ -17,6 +17,7 @@ function pushOneFileToNotion() {
   const meta = { url, tags: Array.isArray(meta0.tags) ? meta0.tags : [] };
 
   createPageWithChunkAppend(title, blocks, meta);
+  ensureFileFrontMatterSynced(file, raw);
 }
 
 function syncMarkedFilesToNotion() {
@@ -30,7 +31,7 @@ function syncMarkedFilesToNotion() {
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
     const raw = entry.file.getBlob().getDataAsString('UTF-8');
-    const meta0 = parseFrontMatter(raw) || { body: raw, url: null, tags: [], notion: false, synced: false };
+    const meta0 = parseFrontMatter(raw) || { body: raw, url: null, tags: [], notion: false, synced: false, format: null };
 
     const hasExportMarker = /^#export:notion\b/m.test(raw);
     const hasNotionTag = Array.isArray(meta0.tags)
@@ -57,6 +58,7 @@ function syncMarkedFilesToNotion() {
     Logger.log(`⬆️ Syncing: ${entry.path}`);
     upsertByTitle(title, blocks, meta);
     syncedCount++;
+    ensureFileFrontMatterSynced(entry.file, raw);
   }
 
   Logger.log(`✅ syncMarkedFilesToNotion done. markdown=${entries.length}, synced=${syncedCount}`);
@@ -82,5 +84,15 @@ function collectMarkdownEntries(folder, prefix, out) {
     const subName = sub.getName();
     Logger.log(`📂 Enter: ${prefix + subName}/`);
     collectMarkdownEntries(sub, `${prefix}${subName}/`, out);
+  }
+}
+
+
+
+function ensureFileFrontMatterSynced(file, originalRaw) {
+  const result = ensureNotionSyncedFrontMatterText(originalRaw);
+  if (result && result.updated) {
+    file.setContent(result.content);
+    Logger.log(`📝 Updated NotionSynced front matter: ${file.getName()}`);
   }
 }
