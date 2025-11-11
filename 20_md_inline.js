@@ -43,18 +43,43 @@ function convertMarkdownInlineToRich(text) {
     for (const b of boldSplit) {
       // 旧：太字をそのまま text ノードで push していた部分を差し替え
       if (b.kind !== 'plain') {
-        // 太字の中身をまず LaTeX 分解 → その上で text ノードだけ bold 付与
-        const richBold = convertInlineLatexToRich(b.text).map(n => {
+        const rawSegments = convertInlineLatexToRich(b.text);
+        const richBold = rawSegments.map(n => {
           if (n.type === 'text') {
             return {
               ...n,
               annotations: { ...(n.annotations || {}), bold: true }
             };
           }
-          // equation 等はそのまま（bold を付けない）
+          if (n.type === 'equation') {
+            const expression = n.equation?.expression || '';
+            return {
+              type: 'rich_text',
+              rich_text: [{
+                type: 'text',
+                text: { content: '$' },
+                annotations: { bold: true }
+              }, {
+                type: 'equation',
+                equation: { expression }
+              }, {
+                type: 'text',
+                text: { content: '$' },
+                annotations: { bold: true }
+              }]
+            };
+          }
           return n;
         });
-        out.push(...richBold);
+        for (const item of richBold) {
+          if (item.type === 'rich_text') {
+            if (Array.isArray(item.rich_text)) {
+              for (const inner of item.rich_text) out.push(inner);
+            }
+          } else {
+            out.push(item);
+          }
+        }
       } else {
         // （この下の斜体処理はそのまま残す）
         let iLast = 0; MD_ITALIC_REGEX.lastIndex = 0;

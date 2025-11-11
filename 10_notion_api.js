@@ -32,10 +32,18 @@ function createPageWithChunkAppend(title, children, meta) {
     throw new Error('Notion page id missing');
   }
 
-  // ★ その後、順次投稿（table は二段階）
-  appendBlocksWithTables(pageId, children, true);
+  const tocBlock = {
+    object: 'block',
+    type: 'table_of_contents',
+    table_of_contents: {}
+  };
+  const hasToc = Array.isArray(children) && children.length && children[0] && children[0].type === 'table_of_contents';
+  const blocks = hasToc ? children : [tocBlock].concat(children || []);
 
-  Logger.log(`✅ Created: ${title} (${children.length} blocks)`);
+  // ★ その後、順次投稿（table は二段階）
+  appendBlocksWithTables(pageId, blocks, true);
+
+  Logger.log(`✅ Created: ${title} (${blocks.length} blocks)`);
 }
 
 
