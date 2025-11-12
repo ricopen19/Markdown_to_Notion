@@ -1,4 +1,7 @@
-function createPageWithChunkAppend(title, children, meta) {
+function createPageWithChunkAppend(title, children, meta, options) {
+  options = options || {};
+  const targetDatabaseId = options.databaseId || DATABASE_ID;
+
   // createPageWithChunkAppend 内の properties 構築
   const properties = { Name: { title: [{ text: { content: title } }] } };
   if (meta && meta.url) properties.URL = { url: meta.url };
@@ -10,7 +13,7 @@ function createPageWithChunkAppend(title, children, meta) {
   const res = UrlFetchApp.fetch('https://api.notion.com/v1/pages', {
     method: 'post',
     headers: NOTION_HEADERS,
-    payload: JSON.stringify({ parent: { database_id: DATABASE_ID }, properties }),
+    payload: JSON.stringify({ parent: { database_id: targetDatabaseId }, properties }),
     muteHttpExceptions: true
   });
   const status = res.getResponseCode();
@@ -48,7 +51,10 @@ function createPageWithChunkAppend(title, children, meta) {
 
 
 
-function upsertByTitle(title, children, meta) {
+function upsertByTitle(title, children, meta, options) {
+  options = options || {};
+  const targetDatabaseId = options.databaseId || DATABASE_ID;
+
   const search = UrlFetchApp.fetch('https://api.notion.com/v1/search', {
     method: 'post', headers: NOTION_HEADERS,
     payload: JSON.stringify({ query: title, filter: { value: 'page', property: 'object' } }),
@@ -68,13 +74,15 @@ function upsertByTitle(title, children, meta) {
     throw e;
   }
   const hit = res.results.find(r => r.object === 'page'
+    && r.parent?.type === 'database_id'
+    && r.parent?.database_id === targetDatabaseId
     && r.properties?.Name?.title?.[0]?.plain_text === title);
 
-  if (!hit) return createPageWithChunkAppend(title, children, meta);
+  if (!hit) return createPageWithChunkAppend(title, children, meta, options);
 
   archiveNotionPage(hit.id);
   Utilities.sleep(500);
-  createPageWithChunkAppend(title, children, meta);
+  createPageWithChunkAppend(title, children, meta, options);
   Logger.log(`🔁 Recreated: ${title} (${children.length} blocks)`);
 }
 

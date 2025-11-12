@@ -1,31 +1,102 @@
 function pushOneFileToNotion() {
   const FILE_ID = '1MBlBwtj9sr35S_6Caz0n4I3fOufU2hF4';
-  const file = DriveApp.getFileById(FILE_ID);
+  syncSingleFileById(FILE_ID, { databaseId: DATABASE_ID });
+}
+
+
+
+function syncMarkedFilesToNotion() {
+  syncFolderEntries(VAULT_FOLDER_ID, { databaseId: DATABASE_ID });
+}
+
+
+
+function syncMarkedFilesFromSheet() {
+  if (!SYNC_CONFIG_SHEET_ID) {
+    Logger.log('⚠️ SYNC_CONFIG_SHEET_ID が設定されていません。');
+    return;
+  }
+  const config = loadSyncConfigRows();
+  if (!config || !config.rows.length) {
+    Logger.log('⚠️ NotionSyncConfig シートに同期対象がありません。');
+    return;
+  }
+  for (const row of config.rows) {
+    const data = row.values;
+    if (isConfigRowBlank(data)) {
+      continue;
+    }
+    const isActive = parseSheetBoolean(data.Active);
+    if (!isActive) {
+      updateConfigRowStatus(config, row.rowIndex, { Status: 'Skipped (inactive)' });
+      continue;
+    }
+    const mode = String(data.Mode || 'folder').toLowerCase();
+    const databaseId = (data.NotionDatabaseId && data.NotionDatabaseId.toString().trim()) || null;
+    const folderId = data.FolderId && data.FolderId.toString().trim();
+    const fileId = data.FileId && data.FileId.toString().trim();
+    let summary = { total: 0, synced: 0 };
+    let status = '';
+    try {
+      if (mode === 'folder') {
+        if (!folderId) throw new Error('FolderId が未設定です');
+        summary = syncFolderEntries(folderId, {
+          databaseId: databaseId || DATABASE_ID,
+          label: data.FolderName || folderId
+        });
+        status = `OK folder (synced ${summary.synced})`;
+      } else if (mode === 'file') {
+        if (!fileId) throw new Error('FileId が未設定です');
+        summary = syncSingleFileById(fileId, { databaseId: databaseId || DATABASE_ID });
+        status = summary.synced ? 'OK file' : 'Skipped file';
+      } else {
+        status = `Unknown mode: ${mode}`;
+      }
+      updateConfigRowStatus(config, row.rowIndex, {
+        LastSynced: new Date(),
+        Status: status
+      });
+    } catch (e) {
+      Logger.log(`❌ Config row ${row.rowIndex} failed: ${e}`);
+      updateConfigRowStatus(config, row.rowIndex, { Status: `Error: ${e.message}` });
+    }
+  }
+}
+
+
+
+function syncSingleFileById(fileId, options) {
+  options = options || {};
+  const file = DriveApp.getFileById(fileId);
   const title = file.getName().replace(/\.md$/i, '');
   const raw  = file.getBlob().getDataAsString('UTF-8');
 
   const meta0 = parseFrontMatter(raw) || { body: raw, url: null, tags: [], notion: false, synced: false, format: null };
   if (meta0.synced) {
-    Logger.log('⏭️ Skip (NotionSynced=true) for pushOneFileToNotion');
-    return;
+    Logger.log(`⏭️ Skip (NotionSynced=true): ${title}`);
+    return { total: 1, synced: 0 };
   }
-  const mdBody = meta0.body || raw;               // ★ 本文は必ず body
+  const mdBody = meta0.body || raw;
   const blocks = mdToNotionBlocks(mdBody);
-
-  // URL フォールバック（必要なときだけ）
   const url = meta0.url || ((mdBody.match(ANY_URL_REGEX) || [])[0] || null);
   const meta = { url, tags: Array.isArray(meta0.tags) ? meta0.tags : [] };
 
-  createPageWithChunkAppend(title, blocks, meta);
+  upsertByTitle(title, blocks, meta, options);
   ensureFileFrontMatterSynced(file, raw);
+  return { total: 1, synced: 1 };
 }
 
-function syncMarkedFilesToNotion() {
-  const folder = DriveApp.getFolderById(VAULT_FOLDER_ID);
+
+
+function syncFolderEntries(folderId, options) {
+  options = options || {};
+  const folder = DriveApp.getFolderById(folderId);
   const entries = [];
   collectMarkdownEntries(folder, '', entries);
 
-  Logger.log(`📁 Found ${entries.length} markdown files under vault.`);
+  const label = options.label || folder.getName() || folderId;
+  Logger.log(`📁 Folder "${label}": found ${entries.length} markdown files`);
+
   let syncedCount = 0;
 
   for (let i = 0; i < entries.length; i++) {
@@ -49,19 +120,20 @@ function syncMarkedFilesToNotion() {
     }
 
     const title = entry.name.replace(/\.md$/i, '');
-    const mdBody = meta0.body || raw;             // ★ 本文は必ず body
+    const mdBody = meta0.body || raw;
     const blocks = mdToNotionBlocks(mdBody);
 
     const url = meta0.url || ((mdBody.match(ANY_URL_REGEX) || [])[0] || null);
     const meta = { url, tags: Array.isArray(meta0.tags) ? meta0.tags : [] };
 
     Logger.log(`⬆️ Syncing: ${entry.path}`);
-    upsertByTitle(title, blocks, meta);
+    upsertByTitle(title, blocks, meta, options);
     syncedCount++;
     ensureFileFrontMatterSynced(entry.file, raw);
   }
 
-  Logger.log(`✅ syncMarkedFilesToNotion done. markdown=${entries.length}, synced=${syncedCount}`);
+  Logger.log(`✅ Folder "${label}" sync done. markdown=${entries.length}, synced=${syncedCount}`);
+  return { total: entries.length, synced: syncedCount };
 }
 
 
@@ -85,6 +157,68 @@ function collectMarkdownEntries(folder, prefix, out) {
     Logger.log(`📂 Enter: ${prefix + subName}/`);
     collectMarkdownEntries(sub, `${prefix}${subName}/`, out);
   }
+}
+
+
+
+function loadSyncConfigRows() {
+  const ss = SpreadsheetApp.openById(SYNC_CONFIG_SHEET_ID);
+  const sheet = ss.getSheetByName(SYNC_CONFIG_SHEET_NAME);
+  if (!sheet) throw new Error(`シート ${SYNC_CONFIG_SHEET_NAME} が見つかりません`);
+  const range = sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn());
+  const values = range.getValues();
+  if (!values.length) return { sheet, headerMap: {}, rows: [] };
+  const headers = values.shift();
+  const headerMap = {};
+  headers.forEach((h, idx) => { headerMap[h] = idx + 1; });
+  const rows = values.map((row, idx) => {
+    const obj = {};
+    headers.forEach((h, colIdx) => { obj[h] = row[colIdx]; });
+    return { rowIndex: idx + 2, values: obj };
+  });
+  return { sheet, headerMap, rows };
+}
+
+
+
+function updateConfigRowStatus(config, rowIndex, fields) {
+  if (!config || !config.sheet) return;
+  Object.keys(fields).forEach((key) => {
+    const col = config.headerMap[key];
+    if (!col) return;
+    config.sheet.getRange(rowIndex, col).setValue(fields[key]);
+  });
+}
+
+
+
+function parseSheetBoolean(value) {
+  if (value === true || value === false) return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const lower = value.trim().toLowerCase();
+    if (!lower) return false;
+    return lower === 'true' || lower === '1' || lower === 'yes';
+  }
+  return false;
+}
+
+
+
+function isConfigRowBlank(data) {
+  if (!data) return true;
+  for (const key of Object.keys(data)) {
+    const v = data[key];
+    if (v === null || v === undefined) continue;
+    if (typeof v === 'string' && v.trim() === '') continue;
+    if (typeof v === 'boolean') {
+      if (v === true) return false;
+      continue;
+    }
+    if (typeof v === 'number' && v === 0) continue;
+    return false;
+  }
+  return true;
 }
 
 
