@@ -40,21 +40,18 @@ Markdown → Notion ブロックへの変換や、Notion テーブル・Mermaid�
 | `Schedule` | 任意のメモ欄 |
 | `LastSynced`, `Status` | GAS が書き込む同期履歴 |
 
-![NotionSyncConfig Sheet](./docs/images/notion_sync_sheet.png)
-
 ### シートを自動生成する GAS
 
 `createSyncConfigSheet()` を実行すると、上記構成のスプレッドシートを自動作成できます。  
 （コード例は `docs/scripts/create_spreadsheet.js` にあります）
 
-![createSyncConfigSheet](./docs/images/create_sheet_script.png)
 
 ### フォルダ一覧をシートに転記する GAS
 
 `runListSpecificFoldersToSheet()` を使うと、指定フォルダ配下のツリー構造をシートへ書き出し、`FolderName` / `FolderId` 列を一括転記できます。  
 （コード例は `docs/scripts/id_fetch.js` にあります）
 
-![listFoldersToSheet](./docs/images/list_folders_script.png)
+![listFoldersToSheet](./docs/images/spreadsheet_sample.png)
 
 ---
 
