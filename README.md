@@ -76,5 +76,4 @@ Markdown → Notion ブロックへの変換や、Notion テーブル・Mermaid�
 
 ## ライセンス
 
-MIT License  
-詳しくは `LICENSE` をご確認ください。
+ご自由にお使いください。
