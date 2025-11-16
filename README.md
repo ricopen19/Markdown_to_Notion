@@ -71,9 +71,3 @@ Markdown → Notion ブロックへの変換や、Notion テーブル・Mermaid�
 - テーブル：環境が許せば table/table_row を API から投稿、非対応環境では Markdown コードにフォールバック
 - NotionSynced フラグの自動付与（front matter に `NotionSynced: true` を追記）
 - ハブスプレッドシートから複数フォルダをまとめて同期
-
----
-
-## ライセンス
-
-ご自由にお使いください。
