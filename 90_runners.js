@@ -1,10 +1,3 @@
-function pushOneFileToNotion() {
-  const FILE_ID = '1MBlBwtj9sr35S_6Caz0n4I3fOufU2hF4';
-  syncSingleFileById(FILE_ID, { databaseId: DATABASE_ID });
-}
-
-
-
 function syncMarkedFilesToNotion() {
   syncFolderEntries(VAULT_FOLDER_ID, { databaseId: DATABASE_ID });
 }
@@ -34,23 +27,18 @@ function syncMarkedFilesFromSheet() {
     const mode = String(data.Mode || 'folder').toLowerCase();
     const databaseId = (data.NotionDatabaseId && data.NotionDatabaseId.toString().trim()) || null;
     const folderId = data.FolderId && data.FolderId.toString().trim();
-    const fileId = data.FileId && data.FileId.toString().trim();
     let summary = { total: 0, synced: 0 };
     let status = '';
     try {
-      if (mode === 'folder') {
+      if (mode !== 'folder') {
+        status = `Unsupported mode: ${mode}`;
+      } else {
         if (!folderId) throw new Error('FolderId が未設定です');
         summary = syncFolderEntries(folderId, {
           databaseId: databaseId || DATABASE_ID,
           label: data.FolderName || folderId
         });
         status = `OK folder (synced ${summary.synced})`;
-      } else if (mode === 'file') {
-        if (!fileId) throw new Error('FileId が未設定です');
-        summary = syncSingleFileById(fileId, { databaseId: databaseId || DATABASE_ID });
-        status = summary.synced ? 'OK file' : 'Skipped file';
-      } else {
-        status = `Unknown mode: ${mode}`;
       }
       updateConfigRowStatus(config, row.rowIndex, {
         LastSynced: new Date(),
@@ -62,31 +50,6 @@ function syncMarkedFilesFromSheet() {
     }
   }
 }
-
-
-
-function syncSingleFileById(fileId, options) {
-  options = options || {};
-  const file = DriveApp.getFileById(fileId);
-  const title = file.getName().replace(/\.md$/i, '');
-  const raw  = file.getBlob().getDataAsString('UTF-8');
-
-  const meta0 = parseFrontMatter(raw) || { body: raw, url: null, tags: [], notion: false, synced: false, format: null };
-  if (meta0.synced) {
-    Logger.log(`⏭️ Skip (NotionSynced=true): ${title}`);
-    return { total: 1, synced: 0 };
-  }
-  const mdBody = meta0.body || raw;
-  const blocks = mdToNotionBlocks(mdBody);
-  const url = meta0.url || ((mdBody.match(ANY_URL_REGEX) || [])[0] || null);
-  const meta = { url, tags: Array.isArray(meta0.tags) ? meta0.tags : [] };
-
-  upsertByTitle(title, blocks, meta, options);
-  ensureFileFrontMatterSynced(file, raw);
-  return { total: 1, synced: 1 };
-}
-
-
 
 function syncFolderEntries(folderId, options) {
   options = options || {};

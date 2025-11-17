@@ -11,22 +11,20 @@ function createSyncConfigSheet() {
       const sheetName = 'NotionSyncConfig';
       
       // ユーザー定義のヘッダーリスト
-      // 運用しやすいように順序を調整し、ステータス列も追加しています。
+      // フォルダ単位同期に絞った構成。
       const headers = [
         // --- 設定項目 (ユーザーが入力) ---
-        'Active',         // 同期対象 (TRUE/FALSE)
-        'Mode',           // 同期モード (folder/file)
-        'FolderId',       // Drive フォルダID (Mode=folder の場合)
-        'FileId',         // Drive ファイルID (Mode=file の場合)
-        'Tags',           // メタ情報: タグ (カンマ区切りなど)
-        'URL',            // メタ情報: 関連URL
-        'NotionDatabaseId', // (オプション) 同期先DB ID
-        'FrontMatterOnly',  // (オプション) フロントマターのみ (TRUE/FALSE)
-        'Schedule',       // (オプション) 同期頻度メモ
+        'Active',            // 同期対象 (TRUE/FALSE)
+        'FolderName',        // 任意メモ（インデント等で階層を表現）
+        'FolderId',          // Drive フォルダID
+        'Tags',              // メタ情報: タグ (カンマ区切りなど)
+        'URL',               // メタ情報: 関連URL
+        'NotionDatabaseId',  // (オプション) 同期先DB ID
+        'Schedule',          // (オプション) 同期頻度メモ
         
         // --- GASが書き込む欄 ---
-        'LastSynced',     // (GASが書き込む) 最終同期日時
-        'Status'          // (GASが書き込む) 最終同期ステータス (DONE/FAILED/...)
+        'LastSynced',        // (GASが書き込む) 最終同期日時
+        'Status'             // (GASが書き込む) 最終同期ステータス (DONE/FAILED/...)
       ];
   
       // 新しいスプレッドシートを作成
@@ -56,14 +54,6 @@ function createSyncConfigSheet() {
         .build();
       // 2行目以降に適用
       sheet.getRange(2, 1, sheet.getMaxRows() - 1, 1).setDataValidation(activeRule);
-  
-      // Mode列 (B列) にドロップダウンリスト (folder/file) を設定
-      const modeRule = SpreadsheetApp.newDataValidation()
-        .requireValueInList(['folder', 'file'], true) // ドロップダウンリストを有効化
-        .setAllowInvalid(false) // リスト以外の値を許可しない
-        .build();
-      // 2行目以降に適用
-      sheet.getRange(2, 2, sheet.getMaxRows() - 1, 1).setDataValidation(modeRule);
   
       // 5. 列幅をコンテンツに合わせて自動調整
       sheet.autoResizeColumns(1, headers.length);
